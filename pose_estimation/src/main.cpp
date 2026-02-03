@@ -28,6 +28,8 @@
 
 #include "fdcl_common.hpp"
 
+#include <librealsense2/rs.hpp>
+
 
 int main(int argc, char **argv)
 {
@@ -40,10 +42,28 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // If -v is provided, use VideoCapture (offline). Otherwise use RealSense.
     cv::VideoCapture in_video;
-    success = parse_video_in(in_video, parser);
-    if (!success) {
-        return 1;
+
+    rs2::pipeline rs_pipe;
+    rs2::config rs_cfg;
+    bool useVideoFile = parser.has("v");   // assuming parse_video_in uses -v
+    bool rs_started = false;
+
+    if (useVideoFile) {
+        success = parse_video_in(in_video, parser);
+        if (!success) return 1;
+    } else {
+        rs_cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, 30);
+        try {
+            rs_pipe.start(rs_cfg);
+            rs_started = true;
+        } catch (const rs2::error& e) {
+            std::cerr << "RealSense error calling " << e.get_failed_function()
+                    << "(" << e.get_failed_args() << "):\n"
+                    << e.what() << std::endl;
+            return 1;
+        }
     }
 
     int dictionary_id = parser.get<int>("d");
@@ -71,9 +91,26 @@ int main(int argc, char **argv)
     fs["distortion_coefficients"] >> dist_coeffs;
 
 
-    while (in_video.grab())
+    for (;;)
     {
-        in_video.retrieve(image);
+        if (useVideoFile) {
+            if (!in_video.grab()) break;
+            in_video.retrieve(image);
+            if (image.empty()) break;
+        } else {
+            rs2::frameset frames = rs_pipe.wait_for_frames();
+            rs2::video_frame color = frames.get_color_frame();
+            if (!color) continue;
+
+            cv::Mat rs_image(
+                cv::Size(color.get_width(), color.get_height()),
+                CV_8UC3,
+                (void*)color.get_data(),
+                cv::Mat::AUTO_STEP
+            );
+            image = rs_image.clone(); // safe copy
+        }
+
         image.copyTo(image_copy);
 
         std::vector<int> ids;
@@ -116,7 +153,8 @@ int main(int argc, char **argv)
         }
     }
 
-    in_video.release();
+    if (useVideoFile) in_video.release();
+    if (rs_started) rs_pipe.stop();
 
     return 0;
 }

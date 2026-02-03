@@ -47,6 +47,8 @@ the use of this software, even if advised of the possibility of such damage.
 #include <iostream>
 #include <ctime>
 
+#include <librealsense2/rs.hpp>
+
 using namespace std;
 using namespace cv;
 
@@ -200,21 +202,34 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    String videoInput;
-    VideoCapture inputVideo;
+    // If -v is provided, use OpenCV VideoCapture (offline).
+    // Otherwise use RealSense live stream.
+    bool useVideoFile = !video.empty();
+    cv::VideoCapture inputVideo;
 
-    bool opened;
-    if(!video.empty()) {
-        videoInput = video;
-        opened = inputVideo.open(video);
+    rs2::pipeline rs_pipe;
+    rs2::config   rs_cfg;
+    bool rs_started = false;
+
+    if (useVideoFile) {
+        if (!inputVideo.open(video)) {
+            std::cerr << "failed to open video file: " << video << std::endl;
+            return 1;
+        }
     } else {
-        videoInput = camId;
-        opened = inputVideo.open(camId);
-    }
+        // Start RealSense pipeline (color stream only)
+        // NOTE: D455 supports BGR8; using BGR avoids color conversion for OpenCV.
+        rs_cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, 30);
 
-    if (!opened) {
-        std::cerr << "failed to open video input: " << videoInput << std::endl;
-        return 1;
+        try {
+            rs_pipe.start(rs_cfg);
+            rs_started = true;
+        } catch (const rs2::error& e) {
+            std::cerr << "RealSense error calling " << e.get_failed_function()
+                    << "(" << e.get_failed_args() << "):\n"
+                    << e.what() << std::endl;
+            return 1;
+        }
     }
 
     Ptr<aruco::Dictionary> dictionary =
@@ -230,12 +245,32 @@ int main(int argc, char *argv[]) {
     vector< vector< int > > allIds;
     Size imgSize;
 
-    while(inputVideo.grab()) {
+    for (;;) {
         Mat image, imageCopy;
-        inputVideo.retrieve(image);
 
-        vector< int > ids;
-        vector< vector< Point2f > > corners, rejected;
+        if (useVideoFile) {
+            if (!inputVideo.grab()) break;
+            inputVideo.retrieve(image);
+            if (image.empty()) break;
+        } else {
+            // RealSense frame
+            rs2::frameset frames = rs_pipe.wait_for_frames();
+            rs2::video_frame color = frames.get_color_frame();
+            if (!color) continue;
+
+            // Wrap RealSense buffer into cv::Mat (clone to make it safe beyond this scope)
+            Mat rs_image(
+                Size(color.get_width(), color.get_height()),
+                CV_8UC3,
+                (void*)color.get_data(),
+                Mat::AUTO_STEP
+            );
+
+            image = rs_image.clone();
+        }
+
+        vector<int> ids;
+        vector<vector<Point2f>> corners, rejected;
 
         // detect markers
         aruco::detectMarkers(image, dictionary, corners, ids, detectorParams, rejected);
@@ -252,6 +287,7 @@ int main(int argc, char *argv[]) {
         imshow("out", imageCopy);
         char key = (char)waitKey(waitTime);
         if(key == 27) break;
+
         if(key == 'c' && ids.size() > 0) {
             cout << "Frame captured" << endl;
             allCorners.push_back(corners);
@@ -259,6 +295,7 @@ int main(int argc, char *argv[]) {
             imgSize = image.size();
         }
     }
+
 
     if(allIds.size() < 1) {
         cerr << "Not enough captures for calibration" << endl;
@@ -301,6 +338,9 @@ int main(int argc, char *argv[]) {
 
     cout << "Rep Error: " << repError << endl;
     cout << "Calibration saved to " << outputFile << endl;
+
+    if (useVideoFile) inputVideo.release();
+    if (rs_started) rs_pipe.stop();
 
     return 0;
 }

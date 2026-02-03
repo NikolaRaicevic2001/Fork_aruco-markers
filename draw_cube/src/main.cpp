@@ -31,6 +31,7 @@
 
 #include "fdcl_common.hpp"
 
+#include <librealsense2/rs.hpp>
 
 void drawCubeWireframe(
     cv::InputOutputArray image, cv::InputArray camera_matrix,
@@ -53,10 +54,28 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // If -v is provided use OpenCV VideoCapture. Otherwise use RealSense live stream.
     cv::VideoCapture in_video;
-    success = parse_video_in(in_video, parser);
-    if (!success) {
-        return 1;
+
+    rs2::pipeline rs_pipe;
+    rs2::config rs_cfg;
+    bool useVideoFile = parser.has("v");  // depends on fdcl::keys using -v for video
+    bool rs_started = false;
+
+    if (useVideoFile) {
+        success = parse_video_in(in_video, parser);
+        if (!success) return 1;
+    } else {
+        rs_cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, 30);
+        try {
+            rs_pipe.start(rs_cfg);
+            rs_started = true;
+        } catch (const rs2::error& e) {
+            std::cerr << "RealSense error calling " << e.get_failed_function()
+                    << "(" << e.get_failed_args() << "):\n"
+                    << e.what() << std::endl;
+            return 1;
+        }
     }
 
     int wait_time = 10;
@@ -83,17 +102,42 @@ int main(int argc, char **argv) {
 
 
     // Initialize a video writer to save the drawn cube.
-    int frame_width = in_video.get(cv::CAP_PROP_FRAME_WIDTH);
-    int frame_height = in_video.get(cv::CAP_PROP_FRAME_HEIGHT);
+    int frame_width = 640;
+    int frame_height = 480;
     int fps = 30;
+
+    if (useVideoFile) {
+        frame_width = (int)in_video.get(cv::CAP_PROP_FRAME_WIDTH);
+        frame_height = (int)in_video.get(cv::CAP_PROP_FRAME_HEIGHT);
+        fps = (int)in_video.get(cv::CAP_PROP_FPS);
+        if (fps <= 0) fps = 30;
+    }
+
+    // MJPG is OK for most setups
     int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
     cv::VideoWriter video(
         "out.avi", fourcc, fps, cv::Size(frame_width, frame_height), true
     );
 
+    for (;;) {
+        if (useVideoFile) {
+            if (!in_video.grab()) break;
+            in_video.retrieve(image);
+            if (image.empty()) break;
+        } else {
+            rs2::frameset frames = rs_pipe.wait_for_frames();
+            rs2::video_frame color = frames.get_color_frame();
+            if (!color) continue;
 
-    while (in_video.grab()) {
-        in_video.retrieve(image);
+            cv::Mat rs_image(
+                cv::Size(color.get_width(), color.get_height()),
+                CV_8UC3,
+                (void*)color.get_data(),
+                cv::Mat::AUTO_STEP
+            );
+            image = rs_image.clone(); // safe copy
+        }
+
         image.copyTo(image_copy);
 
         std::vector<int> ids;
@@ -139,7 +183,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    in_video.release();
+    if (useVideoFile) in_video.release();
+    if (rs_started) rs_pipe.stop();
+    video.release();
 
     return 0;
 }

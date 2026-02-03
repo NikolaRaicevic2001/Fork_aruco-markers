@@ -52,6 +52,17 @@ sudo apt install -y libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev
 # Video support
 sudo apt install -y libavcodec-dev libavformat-dev libswscale-dev
 
+# Realsense
+apt-get update
+apt-get install -y curl gnupg2 lsb-release apt-transport-https ca-certificates
+curl -sSf https://librealsense.intel.com/Debian/librealsense.pgp \
+  | gpg --dearmor -o /usr/share/keyrings/librealsense2-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/librealsense2-keyring.gpg] https://librealsense.intel.com/Debian/apt-repo $(lsb_release -cs) main" \
+  > /etc/apt/sources.list.d/librealsense2.list
+apt-get update
+apt-get install -y librealsense2-dev librealsense2-utils
+
+
 cd <any directory you want to use>
 git clone https://github.com/fdcl-gwu/aruco-markers.git
 cd aruco-markers
@@ -210,9 +221,19 @@ make
 # Below command is accurate only if you used the same parameters when you generated the markers.
 # If you changed any of them, change below arguments accordingly.
 ./camera_calibration -d=16 -dp=../detector_params.yml -h=2 -w=4 -l=<side length of a single marker (in meters)> -s=<separation between two consecutive markers in the grid (in meters)> ../../calibration_params.yml
+./camera_calibration -d=16 -dp=../detector_params.yml -h=2 -w=4 -l=200 -s=100 ../../calibration_params.yml
 
 # If you want to calibrate with an already saved video, use `-v` flag. For example, for the test video:
 ./camera_calibration -v=../../test_data/test_video.mp4 -d=16 -dp=../detector_params.yml -h=2 -w=4 -l=0.3 -s=0.15 ../../calibration_params.yml
+
+# Camera Calibration Parameters Specifications
+./camera_calibration \
+  -d=16 \
+  -dp=../detector_params.yml \
+  -h=2 -w=4 \
+  -l=0.045 \
+  -s=0.022 \
+  ../../calibration_params.yml
 ```
 
 Then point the camera at the marker at different orientations and at different angles, and save those images by pressing key `C`. 
@@ -233,6 +254,10 @@ make
 
 # For example, for the test video:
 ./pose_estimation -l=0.3 -v=../../test_data/test_video.mp4
+
+# Pose Estimation with Specific Parameters
+./pose_estimation -d=16 -l=0.105  # Big Marker
+./pose_estimation -d=16 -l=0.026  # Smaller Marker
 ```
 
 Below image shows the output of this code. 
@@ -256,6 +281,11 @@ make
 
 For example, for the test video:
 ./draw_cube -l=0.3 -v=../../test_data/test_video.mp4
+
+For Specific Parameters
+./draw_cube -d=16 -l=0.105 # Big Marker
+./draw_cube -d=16 -l=0.045 # Medium Marker
+./draw_cube -d=16 -l=0.026 # Smaller Marker
 ```
 
 Below GIF shows the output of this code.
